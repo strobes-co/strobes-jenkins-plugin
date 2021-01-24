@@ -1,0 +1,15 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form">
+   <f:entry title="${%ScanType}" field="scanType">
+        <f:select/>
+    </f:entry>
+    <f:entry title="${%Target}" field="target">
+        <f:textbox />
+    </f:entry>
+    <f:entry title="${%BuildCriteria}" field="buildCriteria" >
+        <f:checkbox title="${%BuildCriteriaFail}"/>
+    </f:entry>
+    <f:entry title="${%WaitTimeInSec}" field="waitTimeInSec">
+        <f:textbox />
+    </f:entry>
+</j:jelly>

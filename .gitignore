@@ -1,0 +1,9 @@
+.github/
+.vscode/
+.mvn/
+work/
+target/
+.settings/
+.factorypath
+.classpath
+.project
