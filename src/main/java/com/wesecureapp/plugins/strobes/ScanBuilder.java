@@ -21,15 +21,11 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URISyntaxException;
 import java.net.URL;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Scanner;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import jenkins.model.GlobalConfiguration;
 import jenkins.tasks.SimpleBuildStep;
@@ -44,8 +40,8 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
 
     private final String name;
     // will hold stop, continue
-    private boolean buildCriteria;
-    private int waitTimeInSec = 10;
+    private boolean isStopOnFailure;
+    private int waitTimeInSec = 60;
     private String scanType;
     private String target;
     private final static Logger logger = Logger.getLogger(ScanBuilder.class.getName());
@@ -60,12 +56,12 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
     }
 
     @DataBoundSetter
-    public void setBuildCriteria(boolean buildCriteria) {
-        this.buildCriteria = buildCriteria;
+    public void setStopOnFailure(boolean isStopOnFailure) {
+        this.isStopOnFailure = isStopOnFailure;
     }
 
-    public boolean getBuildCriteria() {
-        return buildCriteria;
+    public boolean isStopOnFailure() {
+        return isStopOnFailure;
     }
 
     @DataBoundSetter
@@ -97,16 +93,14 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
 
     private String configToString(ScanGlobalConfiguration config) {
         StringBuilder sb = new StringBuilder();
-        sb.append("*****************************" + System.lineSeparator());
-        sb.append(String.format("Strobes Scan Configuration %n "));
-        // sb.append(String.format("Name: %s %n ", this.getName()));
+        sb.append(String.format("---------- Strobes Scan Configuration ---------- %n "));
         sb.append(String.format("Endpoint: %s %n ", config.getBaseUrl()));
-        sb.append(String.format("Build Criteria: %s %n ", this.getBuildCriteria()));
+        sb.append(String.format("Stop On Failure: %s %n ", this.isStopOnFailure()));
         sb.append(String.format("Wait time in secs: %s %n ", this.getWaitTimeInSec()));
         sb.append(String.format("Scan Configuration: Config: %s, Connector : %s %n ",
                 this.getConfigurationId(this.getScanType()), this.getConnectorType(this.getScanType())));
         sb.append(String.format("Target: %s %n ", this.getTarget()));
-        sb.append("***************************** " + System.lineSeparator());
+        sb.append("-------------------- " + System.lineSeparator());
 
         return sb.toString();
     }
@@ -121,8 +115,11 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
 
     @Override
     public boolean perform(final AbstractBuild<?, ?> build, final Launcher launcher, final BuildListener listener) {
-        if (build == null)
+        if (build == null) {
+            listener.getLogger().append("Error in getting build context" + System.lineSeparator());
             return false;
+        }
+
         ScanGlobalConfiguration scanGlobalConfig = GlobalConfiguration.all().get(ScanGlobalConfiguration.class);
         // Now we have necessary configuration
         if (null != scanGlobalConfig) {
@@ -134,37 +131,87 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
                     configId, connectorTypeId);
             try {
                 ScanResult result = scanHelper.startScan();
-                if (null == result && buildCriteria) {
+                if (null == result) {
+                    // We have to exit flow as we don't have task id to check scan status
                     listener.getLogger().append("Error in connecting to Strobes Scan API, Failing build as configured."
                             + System.lineSeparator());
-                    return false;
-                }
-                // listener.getLogger().
-                if (null != result) {
-                    if (!result.isBuildStatus()) {
-                        // wait for time and recheck
-                        try {
-                            TimeUnit.SECONDS.sleep(waitTimeInSec);
-                            ScanResult rescanResult = scanHelper.getScanStatusbyId(result.getTaskId());
-                            if (rescanResult.isBuildStatus()) {
-                                return true;
-                            }
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                        }
-                    } else {
+                    return !isStopOnFailure;
+                } else {
+                    // log result
+                    listener.getLogger().append(result.toString());
+
+                    // handle failure at Strobes API
+                    if (result.getStatus() == 2) {
+                        listener.getLogger().append("Error Occurred in Strobes Scan" + System.lineSeparator());
+                        return !isStopOnFailure;
+                    }
+
+                    if (result.getStatus() == 3) {
+                        listener.getLogger()
+                                .append(String.format("Scan complete with status: %s %n", result.isBuildStatus()));
+                        return isStopOnFailure ? result.isBuildStatus() : !isStopOnFailure;
+                    }
+
+                    // if Build is configured not to fail, we don't want to rescan as it doesn't
+                    // make any send
+                    if (!isStopOnFailure) {
                         return true;
                     }
+
+                    if (result.getStatus() == 1) {
+                        int remainingWaitTime = waitTimeInSec;
+                        int timeIntervalInSec = 5;
+                        do {
+                            remainingWaitTime -= timeIntervalInSec;
+                            listener.getLogger().append(String.format("Starting rescan at: %s %n", Instant.now()));
+                            // wait for time and recheck
+                            try {
+                                TimeUnit.SECONDS.sleep(timeIntervalInSec);
+                                try {
+                                    ScanResult scanStatusResult = scanHelper.getScanStatusbyId(result.getTaskId());
+
+                                    listener.getLogger().append(scanStatusResult.toString());
+                                    if (scanStatusResult.getStatus() == 2) {
+                                        listener.getLogger()
+                                                .append("Error Occurred in Strobes Scan" + System.lineSeparator());
+                                        return false;
+                                    }
+                                    if (scanStatusResult.getStatus() == 3) {
+                                        listener.getLogger().append(String.format("Scan complete with status: %s %n",
+                                                scanStatusResult.isBuildStatus()));
+                                        return scanStatusResult.isBuildStatus();
+                                    }
+                                } catch (Exception ex) {
+                                    listener.getLogger().append(
+                                            "Error in connecting to Strobes Scan API, Failing build as configured."
+                                                    + System.lineSeparator());
+                                    logger.error(ex);
+                                    return !isStopOnFailure;
+                                }
+
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                            }
+                        } while (remainingWaitTime > timeIntervalInSec);
+
+                        // couldn't find result in valid interval
+                        listener.getLogger()
+                                .append("Couldn't track Strobe Scan Result in specified time" + System.lineSeparator());
+                        return !isStopOnFailure;
+
+                    } else {
+                        return !isStopOnFailure;
+                    }
                 }
-            } catch (ValidationException e) {
+            } catch (Exception e) {
                 listener.getLogger().append(e.getMessage() + System.lineSeparator());
                 // based on build criteria execution should work
-                return buildCriteria;
+                return !isStopOnFailure;
             }
         } else {
             listener.getLogger().append("Strobes Scan is not configured properly" + System.lineSeparator());
         }
-        return true;
+        return !isStopOnFailure;
     }
 
     @Symbol("strobes")
@@ -225,20 +272,6 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
             if (responseCode != 200) {
                 throw new RuntimeException("HttpResponseCode: " + responseCode);
             } else {
-                // StringBuilder respBuilder = new StringBuilder();
-                // Scanner scanner = new Scanner(endpoint.openStream(), "UTF-8");
-
-                // // Write all the JSON data into a string using a scanner
-                // while (scanner.hasNext()) {
-                // respBuilder.append(scanner.nextLine());
-                // }
-
-                // // Close the scanner
-                // scanner.close();
-
-                // JsonSlurper parser = new JsonSlurper();
-                // return (List<Map>) parser.parseText(respBuilder.toString());
-
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "utf-8"))) {
                     StringBuilder response = new StringBuilder();
                     String responseLine = null;
@@ -260,6 +293,13 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
             if (!Utility.isValidUrl(value)) {
                 return FormValidation.error(Messages.StrobesScanBuilder_DescriptorImpl_errors_invalidUrl());
             }
+
+            return FormValidation.ok();
+        }
+
+        public FormValidation doCheckWaitTimeInSec(@QueryParameter int value) {
+            if (value < 60)
+                return FormValidation.error(Messages.StrobesScanBuilder_DescriptorImpl_errors_invalidWaitTime());
 
             return FormValidation.ok();
         }
@@ -307,7 +347,6 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
     @Override
     public void perform(Run<?, ?> run, FilePath workspace, Launcher launcher, TaskListener listener)
             throws InterruptedException, IOException {
-        // TODO Auto-generated method stub
 
     }
 

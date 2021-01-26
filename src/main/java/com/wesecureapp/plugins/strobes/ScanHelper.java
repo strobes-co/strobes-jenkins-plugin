@@ -70,18 +70,13 @@ public class ScanHelper {
                     while ((responseLine = br.readLine()) != null) {
                         response.append(responseLine.trim());
                     }
-                    JsonSlurper jSlurper = new JsonSlurper();
-                    LazyMap respObj = (LazyMap) jSlurper.parseText(response.toString());
+
+                    JSONObject respObj = JSONObject.fromObject(response.toString());
 
                     if (null == respObj) {
                         throw new ValidationException("Invalid result");
                     } else {
-
-                        ScanResult result = new ScanResult();
-                        result.setTaskId(respObj.get("task_id").toString());
-                        result.setStatus(Integer.parseInt(respObj.get("status").toString()));
-                        result.setBuildStatus(Boolean.parseBoolean(respObj.get("build_status").toString()));
-                        return result;
+                        return extractScanResult(respObj);
                     }
                 }
             }
@@ -117,18 +112,13 @@ public class ScanHelper {
                     while ((responseLine = br.readLine()) != null) {
                         response.append(responseLine.trim());
                     }
-                    JsonSlurper jSlurper = new JsonSlurper();
-                    JSONObject respObj = (JSONObject) jSlurper.parseText(response.toString());
+                    JSONObject respObj = JSONObject.fromObject(response.toString());
 
                     if (null == respObj) {
                         throw new ValidationException("Invalid result");
                     } else {
 
-                        ScanResult result = new ScanResult();
-                        result.setTaskId(respObj.getString("task_id"));
-                        result.setStatus(respObj.getInt("status"));
-                        result.setBuildStatus(respObj.getBoolean("build_status"));
-                        return result;
+                        return extractScanResult(respObj);
                     }
                 }
             }
@@ -136,5 +126,26 @@ public class ScanHelper {
         } catch (Exception e) {
             throw new ValidationException(e);
         }
+    }
+
+    private ScanResult extractScanResult(JSONObject respObj) {
+        ScanResult result = new ScanResult();
+        String empty = "";
+        result.setBaseUrl(baseUrl);
+        result.setTaskId(respObj.getOrDefault("task_id", empty).toString());
+        result.setStatus(Integer.parseInt(respObj.getOrDefault("status", empty).toString()));
+        result.setBuildStatus(Boolean.parseBoolean(respObj.getOrDefault("build_status", "false").toString()));
+        result.setOrganizationId(respObj.getOrDefault("organization_id", empty).toString());
+
+        if (respObj.has("bug_stats")) {
+
+            JSONObject bugStatsObj = respObj.getJSONObject("bug_stats");
+            if (null != bugStatsObj && bugStatsObj.size() > 0) {
+                BugStats bugStats = new BugStats();
+                bugStats.fromJSONObject(bugStatsObj);
+                result.setBugStats(bugStats);
+            }
+        }
+        return result;
     }
 }
