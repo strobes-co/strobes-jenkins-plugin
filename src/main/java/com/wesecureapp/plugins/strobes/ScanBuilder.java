@@ -56,11 +56,15 @@ public class ScanBuilder extends Builder implements SimpleBuildStep {
     }
 
     @DataBoundSetter
-    public void setStopOnFailure(boolean isStopOnFailure) {
+    public void setIsStopOnFailure(boolean isStopOnFailure) {
         this.isStopOnFailure = isStopOnFailure;
     }
 
     public boolean isStopOnFailure() {
+        return isStopOnFailure;
+    }
+
+    public boolean getIsStopOnFailure() {
         return isStopOnFailure;
     }
 

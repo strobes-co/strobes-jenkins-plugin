@@ -7,7 +7,7 @@
         <f:textbox />
     </f:entry>
     <f:entry title="${%BuildCriteria}" field="isStopOnFailure" >
-        <f:checkbox title="${%BuildCriteriaFail}"/>
+        <f:checkbox title="${%StopOnFailure}"/>
     </f:entry>
     <f:entry title="${%WaitTimeInSec}" field="waitTimeInSec">
         <f:textbox />
